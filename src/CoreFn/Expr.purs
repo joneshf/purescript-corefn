@@ -19,9 +19,9 @@ import CoreFn.Ident (Ident(..), readIdent)
 import CoreFn.Names (Qualified, readQualified)
 import CoreFn.Util (objectProps)
 import Data.Either (Either(..), either)
-import Data.Foreign (F, Foreign, ForeignError(..), fail, parseJSON, readArray, readBoolean, readChar, readInt, readNumber, readString)
-import Data.Foreign.Class (readProp)
-import Data.Foreign.Index (prop)
+import Data.Foreign (F, Foreign, ForeignError(..), fail, readArray, readBoolean, readChar, readInt, readNumber, readString)
+import Data.Foreign.Index (readIndex, readProp)
+import Data.Foreign.JSON (parseJSON)
 import Data.Traversable (sequence, traverse)
 import Data.Tuple (Tuple(..))
 
@@ -68,7 +68,7 @@ instance showLiteral :: Show a => Show (Literal a) where
 
 readLiteral :: Foreign -> F (Literal (Expr Unit))
 readLiteral x = do
-  label <- readProp 0 x >>= readString
+  label <- readIndex 0 x >>= readString
   readLiteral' label x
 
   where
@@ -77,32 +77,32 @@ readLiteral x = do
   readValues = traverse readExpr
 
   readPair :: Foreign -> String -> F (Tuple String (Expr Unit))
-  readPair obj key = Tuple key <$> (prop key obj >>= readExpr)
+  readPair obj key = Tuple key <$> (readProp key obj >>= readExpr)
 
   readPairs :: Foreign -> Array String -> F (Array (Tuple String (Expr Unit)))
   readPairs obj = sequence <<< (map <<< readPair) obj
 
   readLiteral' :: String -> Foreign -> F (Literal (Expr Unit))
   readLiteral' "IntLiteral" v = do
-    value <- readProp 1 v
+    value <- readIndex 1 v
     NumericLiteral <$> Left <$> readInt value
   readLiteral' "NumberLiteral" v = do
-    value <- readProp 1 v
+    value <- readIndex 1 v
     NumericLiteral <$> Right <$> readNumber value
   readLiteral' "StringLiteral" v = do
-    value <- readProp 1 v
+    value <- readIndex 1 v
     StringLiteral <$> readString value
   readLiteral' "CharLiteral" v = do
-    value <- readProp 1 v
+    value <- readIndex 1 v
     CharLiteral <$> readChar value
   readLiteral' "BooleanLiteral" v = do
-    value <- readProp 1 v
+    value <- readIndex 1 v
     BooleanLiteral <$> readBoolean value
   readLiteral' "ArrayLiteral" v = do
-    array <- readProp 1 v >>= readArray
+    array <- readIndex 1 v >>= readArray
     ArrayLiteral <$> readValues array
   readLiteral' "ObjectLiteral" v = do
-    obj <- readProp 1 v
+    obj <- readIndex 1 v
     keys <- K.keys obj
     ObjectLiteral <$> readPairs obj keys
   readLiteral' label _ = fail $ ForeignError $ "Unknown literal: " <> label
@@ -142,25 +142,25 @@ instance showExpr :: Show a => Show (Expr a) where
 
 readExpr :: Foreign -> F (Expr Unit)
 readExpr x = do
-  label <- readProp 0 x >>= readString
+  label <- readIndex 0 x >>= readString
   readExpr' label x
 
   where
 
   readExpr' :: String -> Foreign -> F (Expr Unit)
   readExpr' "Literal" y = do
-    value <- readProp 1 y
+    value <- readIndex 1 y
     Literal unit <$> readLiteral value
   readExpr' "Abs" y = do
-    ident <- readProp 1 y
-    expr <- readProp 2 y
+    ident <- readIndex 1 y
+    expr <- readIndex 2 y
     Abs unit <$> readIdent ident <*> readExpr expr
   readExpr' "App" y = do
-    expr1 <- readProp 1 y
-    expr2 <- readProp 2 y
+    expr1 <- readIndex 1 y
+    expr2 <- readIndex 2 y
     App unit <$> readExpr expr1 <*> readExpr expr2
   readExpr' "Var" y = do
-    value <- readProp 1 y
+    value <- readIndex 1 y
     Var unit <$> readQualified Ident value
   readExpr' label _ = fail $ ForeignError $ "Unknown expression: " <> label
 
