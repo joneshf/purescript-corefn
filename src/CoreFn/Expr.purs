@@ -3,6 +3,8 @@
 --
 module CoreFn.Expr
   ( Bind(..)
+  , Binder(..)
+  , CaseAlternative(..)
   , Expr(..)
   , Literal(..)
   , readBind
@@ -14,14 +16,18 @@ module CoreFn.Expr
   ) where
 
 import Prelude
-import Data.Foreign.Keys as K
+
+import Control.Alt ((<|>))
 import CoreFn.Ident (Ident(..), readIdent)
-import CoreFn.Names (Qualified, readQualified)
+import CoreFn.Names (ProperName, Qualified, readQualified)
 import CoreFn.Util (objectProps)
-import Data.Either (Either(..), either)
+import Data.Either (Either(..))
 import Data.Foreign (F, Foreign, ForeignError(..), fail, readArray, readBoolean, readChar, readInt, readNumber, readString)
 import Data.Foreign.Index (readIndex, readProp)
 import Data.Foreign.JSON (parseJSON)
+import Data.Foreign.Keys as K
+import Data.Generic (class Generic, gShow)
+import Data.Newtype (wrap)
 import Data.Traversable (sequence, traverse)
 import Data.Tuple (Tuple(..))
 
@@ -57,14 +63,10 @@ data Literal a
 
 derive instance eqLiteral :: Eq a => Eq (Literal a)
 derive instance ordLiteral :: Ord a => Ord (Literal a)
+derive instance genericLiteral :: Generic a => Generic (Literal a)
 
-instance showLiteral :: Show a => Show (Literal a) where
-  show (NumericLiteral e) = "(NumericLiteral " <> either show show e <> ")"
-  show (StringLiteral s) = "(StringLiteral " <> show s <> ")"
-  show (CharLiteral c) = "(CharLiteral " <> show c <> ")"
-  show (BooleanLiteral b) = "(BooleanLiteral " <> show b <> ")"
-  show (ArrayLiteral a) = "(ArrayLiteral " <> show a <> ")"
-  show (ObjectLiteral o) = "(ObjectLiteral" <> show o <> ")"
+instance showLiteral :: (Generic a, Show a) => Show (Literal a) where
+  show = gShow
 
 readLiteral :: Foreign -> F (Literal (Expr Unit))
 readLiteral x = do
@@ -130,15 +132,17 @@ data Expr a
   -- Variable
   --
   | Var a (Qualified Ident)
+  -- |
+  -- Case
+  --
+  | Case a (Array (Expr a)) (Array (CaseAlternative a))
 
 derive instance eqExpr :: Eq a => Eq (Expr a)
 derive instance ordExpr :: Ord a => Ord (Expr a)
+derive instance genericExpr :: Generic a => Generic (Expr a)
 
-instance showExpr :: Show a => Show (Expr a) where
-  show (Literal x y) = "(Literal " <> show x <> " " <> show y <> ")"
-  show (Abs x y z) = "(Abs " <> show x <> " " <> show y <> " " <> show z <> ")"
-  show (App x y z) = "(App " <> show x <> " " <> show y <> " " <> show z <> ")"
-  show (Var x y) = "(Var " <> show x <> " " <> show y <> ")"
+instance showExpr :: (Generic a, Show a) => Show (Expr a) where
+  show = gShow
 
 readExpr :: Foreign -> F (Expr Unit)
 readExpr x = do
@@ -162,10 +166,27 @@ readExpr x = do
   readExpr' "Var" y = do
     value <- readIndex 1 y
     Var unit <$> readQualified Ident value
+  readExpr' "Case" y = do
+    foreigns1 <- readIndex 1 y >>= readArray
+    foreigns2 <- readIndex 2 y >>= readArray
+    Case unit <$> traverse readExpr foreigns1 <*> traverse readCaseAlternative foreigns2
   readExpr' label _ = fail $ ForeignError $ "Unknown expression: " <> label
 
 readExprJSON :: String -> F (Expr Unit)
 readExprJSON = parseJSON >=> readExpr
+
+data CaseAlternative a
+  = CaseAlternative a (Array Binder) (Expr a)
+
+derive instance eqCaseAlternative :: Eq a => Eq (CaseAlternative a)
+derive instance ordCaseAlternative :: Ord a => Ord (CaseAlternative a)
+derive instance genericCaseAlternative :: Generic a => Generic (CaseAlternative a)
+
+readCaseAlternative :: Foreign -> F (CaseAlternative Unit)
+readCaseAlternative x = do
+  foreigns <- readIndex 0 x >>= readArray
+  expr <- readIndex 1 x
+  CaseAlternative unit <$> traverse readBinder foreigns <*> readExpr expr
 
 -- |
 --  A let or module binding.
@@ -174,8 +195,9 @@ data Bind a = Bind (Array (Tuple (Tuple a Ident) (Expr a)))
 
 derive instance eqBind :: Eq a => Eq (Bind a)
 derive instance ordBind :: Ord a => Ord (Bind a)
+derive instance genericBind :: Generic a => Generic (Bind a)
 
-instance showBind :: Show a => Show (Bind a) where
+instance showBind :: (Generic a, Show a) => Show (Bind a) where
   show (Bind x) = "(Bind " <> show x <> ")"
 
 readBind :: Foreign -> F (Bind Unit)
@@ -196,3 +218,43 @@ readBind x = do
 
 readBindJSON :: String -> F (Bind Unit)
 readBindJSON = parseJSON >=> readBind
+
+data Binder
+  = NullBinder
+  | LiteralBinder (Literal (Expr Unit))
+  | VarBinder Ident
+  | ConstructorBinder (Qualified ProperName) (Qualified ProperName) (Array Binder)
+
+derive instance eqBinder :: Eq Binder
+derive instance ordBinder :: Ord Binder
+derive instance genericBinder :: Generic Binder
+
+readBinder :: Foreign -> F Binder
+readBinder x =
+  nullBinder x
+    <|> literalBinder x
+    <|> varBinder x
+    <|> constructorBinder x
+    where
+    nullBinder y = do
+      readString y >>= case _ of
+        "NullBinder" -> pure NullBinder
+        label -> fail $ ForeignError $ "Unknown binder: " <> label
+    literalBinder y = do
+      readIndex 0 y >>= readString >>= case _ of
+        "LiteralBinder" -> do
+          LiteralBinder <$> (readIndex 1 y >>= readLiteral)
+        label -> fail $ ForeignError $ "Unknown binder: " <> label
+    varBinder y = do
+      readIndex 0 y >>= readString >>= case _ of
+        "VarBinder" -> do
+          VarBinder <$> (readIndex 1 y >>= readIdent)
+        label -> fail $ ForeignError $ "Unknown binder: " <> label
+    constructorBinder y = do
+      readIndex 0 y >>= readString >>= case _ of
+        "ConstructorBinder" -> do
+          name1 <- readIndex 1 y
+          name2 <- readIndex 2 y
+          foreigns <- readIndex 3 y >>= readArray
+          ConstructorBinder <$> readQualified wrap name1 <*> readQualified wrap name2 <*> traverse readBinder foreigns
+        label -> fail $ ForeignError $ "Unknown binder: " <> label

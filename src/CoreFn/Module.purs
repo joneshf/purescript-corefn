@@ -5,6 +5,7 @@ module CoreFn.Module
   ) where
 
 import Prelude
+
 import CoreFn.Expr (Bind, readBind)
 import CoreFn.Ident (Ident, readIdent)
 import CoreFn.Names (ModuleName(..), readModuleName)
@@ -12,6 +13,7 @@ import CoreFn.Util (objectProp)
 import Data.Foreign (F, Foreign, readArray, readString)
 import Data.Foreign.Index (class Index, index, readProp)
 import Data.Foreign.JSON (parseJSON)
+import Data.Generic (class Generic)
 import Data.Traversable (traverse)
 
 -- |
@@ -28,8 +30,9 @@ data Module a = Module
 
 derive instance eqModule :: Eq a => Eq (Module a)
 derive instance ordModule :: Ord a => Ord (Module a)
+derive instance genericModule :: Generic a => Generic (Module a)
 
-instance showModule :: Show a => Show (Module a) where
+instance showModule :: (Generic a, Show a) => Show (Module a) where
   show (Module { builtWith
                , moduleDecls
                , moduleExports
